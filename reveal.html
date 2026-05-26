@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GeoGuessr — Round reveal</title>
+  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; }
+    #map { height: 100dvh; }
+
+    #legend {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255,255,255,0.95);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 14px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      z-index: 1000;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 90vw;
+    }
+    #legend:empty { display: none; }
+
+    .leg { display: flex; align-items: center; gap: 6px; }
+    .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 1px solid rgba(0,0,0,0.18);
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="legend"></div>
+
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <script>
+    // Manual query-string parser so we can split 'g' values on '|' BEFORE
+    // percent-decoding, which avoids URLSearchParams silently unescaping %7C.
+    function parseQuery() {
+      const out = { g: [] };
+      for (const part of window.location.search.slice(1).split('&')) {
+        const eq = part.indexOf('=');
+        if (eq < 0) continue;
+        const key = decodeURIComponent(part.slice(0, eq));
+        const raw = part.slice(eq + 1);
+        if (key === 'g') {
+          out.g.push(raw);          // keep raw — we split on '|' below
+        } else {
+          out[key] = decodeURIComponent(raw.replace(/\+/g, ' '));
+        }
+      }
+      return out;
+    }
+
+    const p    = parseQuery();
+    const lang = p.lang || 'en';
+    const alat = parseFloat(p.alat);
+    const alon = parseFloat(p.alon);
+
+    // Build guesses list from either mode.
+    const guesses = [];
+
+    // Multi-guess mode: &g=encodedName|lat|lon|RRGGBB  (one per player)
+    for (const raw of p.g) {
+      const [encName, slat, slon, hex] = raw.split('|');
+      guesses.push({
+        name:  decodeURIComponent(encName.replace(/\+/g, ' ')),
+        lat:   parseFloat(slat),
+        lon:   parseFloat(slon),
+        color: '#' + hex,
+      });
+    }
+
+    // Single-guess mode: &glat=…&glon=…&color=RRGGBB
+    if (p.glat && p.glon) {
+      guesses.push({
+        name:  '',
+        lat:   parseFloat(p.glat),
+        lon:   parseFloat(p.glon),
+        color: '#' + (p.color || '3498DB'),
+      });
+    }
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style:     'https://tiles.openfreemap.org/styles/liberty',
+      center:    [alon, alat],
+      zoom:      4,
+    });
+
+    map.once('load', () => {
+      // Switch all label layers to the requested language.
+      for (const layer of map.getStyle().layers) {
+        if (layer.layout?.['text-field']) {
+          map.setLayoutProperty(layer.id, 'text-field',
+            ['coalesce', ['get', `name:${lang}`], ['get', 'name']]);
+        }
+      }
+
+      // Dashed lines from each guess to the actual location.
+      guesses.forEach((g, i) => {
+        map.addSource(`line-${i}`, {
+          type: 'geojson',
+          data: { type: 'Feature', geometry: {
+            type: 'LineString',
+            coordinates: [[g.lon, g.lat], [alon, alat]],
+          }},
+        });
+        map.addLayer({
+          id: `line-${i}`, type: 'line', source: `line-${i}`,
+          paint: { 'line-color': g.color, 'line-width': 2, 'line-dasharray': [4, 3] },
+        });
+      });
+
+      // Actual location — dark marker.
+      new maplibregl.Marker({ color: '#222222' })
+        .setLngLat([alon, alat])
+        .setPopup(new maplibregl.Popup({ offset: 25 }).setText('📍 Actual location'))
+        .addTo(map);
+
+      // One marker per guess.
+      guesses.forEach(g => {
+        const m = new maplibregl.Marker({ color: g.color }).setLngLat([g.lon, g.lat]);
+        if (g.name) m.setPopup(new maplibregl.Popup({ offset: 25 }).setText(g.name));
+        m.addTo(map);
+      });
+
+      // Fit all points in view.
+      const allLng = [alon, ...guesses.map(g => g.lon)];
+      const allLat = [alat, ...guesses.map(g => g.lat)];
+      const minLng = Math.min(...allLng), maxLng = Math.max(...allLng);
+      const minLat = Math.min(...allLat), maxLat = Math.max(...allLat);
+      const span   = Math.max(maxLng - minLng, maxLat - minLat);
+
+      if (span < 0.01) {
+        map.setCenter([alon, alat]);
+        map.setZoom(10);
+      } else {
+        map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+          padding: 80, maxZoom: 12, duration: 0,
+        });
+      }
+
+      // Legend (named players only + actual).
+      const legend = document.getElementById('legend');
+      guesses.filter(g => g.name).forEach(g => {
+        const d = document.createElement('div');
+        d.className = 'leg';
+        d.innerHTML = `<div class="dot" style="background:${g.color}"></div>${g.name}`;
+        legend.appendChild(d);
+      });
+      if (guesses.length > 0) {
+        const d = document.createElement('div');
+        d.className = 'leg';
+        d.innerHTML = `<div class="dot" style="background:#222222"></div>actual`;
+        legend.appendChild(d);
+      }
+    });
+  </script>
+</body>
+</html>
