@@ -10,31 +10,85 @@
     body { font-family: system-ui, sans-serif; }
     #map { height: 100dvh; }
 
-    #legend {
-      position: fixed;
-      bottom: 16px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(255,255,255,0.95);
-      padding: 10px 18px;
+    /* ── Avatar markers ────────────────────────────────────────────────────── */
+    .avatar-marker {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      border: 3px solid var(--c);
+      background: var(--c);
+      overflow: hidden;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.5px;
+      user-select: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      transition: transform 0.12s ease;
+      /* anchor: center of circle sits on the lat/lon */
+    }
+    .avatar-marker:active { transform: scale(0.90); }
+
+    .avatar-marker img {
+      width: 100%; height: 100%; object-fit: cover;
+      /* images load async — shown on top of initials fallback text */
+      position: absolute; inset: 0;
+      border-radius: 50%;
+    }
+
+    /* 🥇 Winner — gold pulsing ring */
+    .avatar-marker.winner {
+      box-shadow:
+        0 0 0 3px gold,
+        0 2px 12px rgba(255, 215, 0, 0.45);
+      animation: winner-pulse 2s ease-in-out infinite;
+    }
+    @keyframes winner-pulse {
+      0%, 100% { box-shadow: 0 0 0 3px gold, 0 2px 12px rgba(255,215,0,0.4); }
+      50%       { box-shadow: 0 0 0 6px gold, 0 4px 18px rgba(255,215,0,0.7); }
+    }
+
+    /* ── Actual location pin ───────────────────────────────────────────────── */
+    .actual-marker {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      background: #111;
+      border: 3px solid #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+    }
+
+    /* ── MapLibre popup overrides ──────────────────────────────────────────── */
+    .maplibregl-popup-content {
+      padding: 10px 14px;
       border-radius: 10px;
-      font-size: 14px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      font-size: 13px;
+      line-height: 1.55;
+      min-width: 130px;
+      box-shadow: 0 3px 14px rgba(0,0,0,0.18);
+    }
+    .maplibregl-popup-close-button { font-size: 18px; line-height: 1; top: 4px; right: 8px; }
+    .pop-medal { font-size: 20px; vertical-align: middle; }
+    .pop-name  { font-weight: 700; font-size: 14px; }
+    .pop-row   { color: #555; margin-top: 3px; }
+
+    /* ── Bottom legend ─────────────────────────────────────────────────────── */
+    #legend {
+      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,255,255,0.95);
+      padding: 9px 16px;
+      border-radius: 12px;
+      font-size: 13px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
       z-index: 1000;
-      display: flex;
-      gap: 14px;
-      flex-wrap: wrap;
-      justify-content: center;
-      max-width: 90vw;
+      display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+      max-width: 92vw;
     }
     #legend:empty { display: none; }
-
-    .leg { display: flex; align-items: center; gap: 6px; }
-    .dot {
-      width: 12px; height: 12px;
-      border-radius: 50%;
-      flex-shrink: 0;
-      border: 1px solid rgba(0,0,0,0.18);
+    .leg { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .leg-dot {
+      width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0;
+      border: 2px solid rgba(0,0,0,0.15);
     }
   </style>
 </head>
@@ -44,8 +98,9 @@
 
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <script>
-    // Manual query-string parser so we can split 'g' values on '|' BEFORE
-    // percent-decoding, which avoids URLSearchParams silently unescaping %7C.
+    // ── URL parsing ─────────────────────────────────────────────────────────────
+    // Manually split '&g=…' values on '|' BEFORE percent-decoding so that a
+    // player name containing '|' (encoded as %7C) doesn't break the separator.
     function parseQuery() {
       const out = { g: [] };
       for (const part of window.location.search.slice(1).split('&')) {
@@ -53,44 +108,117 @@
         if (eq < 0) continue;
         const key = decodeURIComponent(part.slice(0, eq));
         const raw = part.slice(eq + 1);
-        if (key === 'g') {
-          out.g.push(raw);          // keep raw — we split on '|' below
-        } else {
-          out[key] = decodeURIComponent(raw.replace(/\+/g, ' '));
-        }
+        if (key === 'g') { out.g.push(raw); }
+        else { out[key] = decodeURIComponent(raw.replace(/\+/g, ' ')); }
       }
       return out;
     }
 
+    // ── MXC → Matrix thumbnail URL ──────────────────────────────────────────────
+    // Matrix media URLs follow the pattern:
+    //   mxc://<serverName>/<mediaId>
+    // → https://<serverName>/_matrix/media/v3/thumbnail/<serverName>/<mediaId>?…
+    //
+    // This works for any homeserver — no hardcoded domains.
+    function mxcToThumb(mxcUrl, px = 96) {
+      if (!mxcUrl || !mxcUrl.startsWith('mxc://')) return null;
+      const rest    = mxcUrl.slice(6);          // strip 'mxc://'
+      const slash   = rest.indexOf('/');
+      if (slash < 0) return null;
+      const server  = rest.slice(0, slash);
+      const mediaId = rest.slice(slash + 1);
+      // Use 2× the CSS size for crisp retina display.
+      return `https://${server}/_matrix/media/v3/thumbnail/${server}/${mediaId}` +
+             `?width=${px}&height=${px}&method=crop`;
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────────
+    function initials(name) {
+      const words = name.trim().split(/\s+/).filter(Boolean);
+      if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+      return name.slice(0, 2).toUpperCase() || '?';
+    }
+
+    function fmtDist(km) {
+      return km < 1 ? `${Math.round(km * 1000)} m` : `${Math.round(km)} km`;
+    }
+
+    const MEDALS = ['🥇', '🥈', '🥉'];
+
+    // ── Parse params ────────────────────────────────────────────────────────────
     const p    = parseQuery();
     const lang = p.lang || 'en';
     const alat = parseFloat(p.alat);
     const alon = parseFloat(p.alon);
 
-    // Build guesses list from either mode.
     const guesses = [];
 
-    // Multi-guess mode: &g=encodedName|lat|lon|RRGGBB  (one per player)
-    for (const raw of p.g) {
-      const [encName, slat, slon, hex] = raw.split('|');
+    // Multi-guess mode: &g=encodedName|lat|lon|RRGGBB|encodedMxcOrEmpty|score|distKm
+    // (one &g= per player, ranking is implicit from order)
+    p.g.forEach((raw, rank) => {
+      const parts = raw.split('|');
       guesses.push({
-        name:  decodeURIComponent(encName.replace(/\+/g, ' ')),
-        lat:   parseFloat(slat),
-        lon:   parseFloat(slon),
-        color: '#' + hex,
+        rank,
+        name:  decodeURIComponent((parts[0] || '').replace(/\+/g, ' ')),
+        lat:   parseFloat(parts[1]),
+        lon:   parseFloat(parts[2]),
+        color: '#' + (parts[3] || '888888'),
+        mxc:   parts[4] ? decodeURIComponent(parts[4]) : null,
+        score: parts[5] !== undefined && parts[5] !== '' ? parseInt(parts[5])  : null,
+        dist:  parts[6] !== undefined && parts[6] !== '' ? parseFloat(parts[6]) : null,
       });
-    }
+    });
 
-    // Single-guess mode: &glat=…&glon=…&color=RRGGBB
+    // Single-guess mode: &glat=…&glon=…&color=RRGGBB[&mxc=…&score=…&dist=…]
     if (p.glat && p.glon) {
       guesses.push({
-        name:  '',
+        rank:  0,
+        name:  p.name ? decodeURIComponent(p.name) : '',
         lat:   parseFloat(p.glat),
         lon:   parseFloat(p.glon),
         color: '#' + (p.color || '3498DB'),
+        mxc:   p.mxc  ? decodeURIComponent(p.mxc) : null,
+        score: p.score !== undefined && p.score !== '' ? parseInt(p.score)   : null,
+        dist:  p.dist  !== undefined && p.dist  !== '' ? parseFloat(p.dist)  : null,
       });
     }
 
+    // ── Avatar marker element ────────────────────────────────────────────────────
+    function makeAvatarMarker(g) {
+      const el = document.createElement('div');
+      el.className = 'avatar-marker' + (g.rank === 0 && guesses.length > 1 ? ' winner' : '');
+      el.style.setProperty('--c', g.color);
+      el.style.position = 'relative'; // needed for img absolute positioning
+
+      // Show initials as the base layer (always visible until/unless image loads).
+      el.textContent = initials(g.name || '?');
+
+      const thumbUrl = mxcToThumb(g.mxc, 96); // fetch at 96 px (crisp on 2× screens)
+      if (thumbUrl) {
+        const img = document.createElement('img');
+        img.src = thumbUrl;
+        img.onerror = () => img.remove(); // silently fall back to initials already shown
+        el.appendChild(img);
+      }
+
+      return el;
+    }
+
+    // ── Popup HTML ───────────────────────────────────────────────────────────────
+    function makePopupHtml(g) {
+      const medal     = MEDALS[g.rank] || '';
+      const scoreLine = g.score !== null
+        ? `<div class="pop-row">🎯 ${g.score.toLocaleString()} pts</div>` : '';
+      const distLine  = g.dist !== null
+        ? `<div class="pop-row">📍 ${fmtDist(g.dist)} away</div>` : '';
+      return `<div>
+        ${medal ? `<span class="pop-medal">${medal}</span> ` : ''}
+        <span class="pop-name">${g.name}</span>
+        ${scoreLine}${distLine}
+      </div>`;
+    }
+
+    // ── Map ──────────────────────────────────────────────────────────────────────
     const map = new maplibregl.Map({
       container: 'map',
       style:     'https://tiles.openfreemap.org/styles/liberty',
@@ -107,7 +235,7 @@
         }
       }
 
-      // Dashed lines from each guess to the actual location.
+      // Dashed lines: each guess → actual location (drawn first, below markers).
       guesses.forEach((g, i) => {
         map.addSource(`line-${i}`, {
           type: 'geojson',
@@ -118,24 +246,33 @@
         });
         map.addLayer({
           id: `line-${i}`, type: 'line', source: `line-${i}`,
-          paint: { 'line-color': g.color, 'line-width': 2, 'line-dasharray': [4, 3] },
+          paint: { 'line-color': g.color, 'line-width': 2.5, 'line-dasharray': [4, 3] },
         });
       });
 
-      // Actual location — dark marker.
-      new maplibregl.Marker({ color: '#222222' })
+      // Actual location — small dark pin (below player markers in z-order).
+      const actualEl = document.createElement('div');
+      actualEl.className = 'actual-marker';
+      new maplibregl.Marker({ element: actualEl, anchor: 'center' })
         .setLngLat([alon, alat])
-        .setPopup(new maplibregl.Popup({ offset: 25 }).setText('📍 Actual location'))
+        .setPopup(
+          new maplibregl.Popup({ offset: 13, closeButton: false })
+            .setHTML('<div><strong>📍 Actual location</strong></div>')
+        )
         .addTo(map);
 
-      // One marker per guess.
-      guesses.forEach(g => {
-        const m = new maplibregl.Marker({ color: g.color }).setLngLat([g.lon, g.lat]);
-        if (g.name) m.setPopup(new maplibregl.Popup({ offset: 25 }).setText(g.name));
-        m.addTo(map);
+      // Avatar markers — add in reverse rank order so rank-0 (winner) is on top.
+      [...guesses].reverse().forEach(g => {
+        new maplibregl.Marker({ element: makeAvatarMarker(g), anchor: 'center' })
+          .setLngLat([g.lon, g.lat])
+          .setPopup(
+            new maplibregl.Popup({ offset: 27, closeButton: false })
+              .setHTML(makePopupHtml(g))
+          )
+          .addTo(map);
       });
 
-      // Fit all points in view.
+      // Fit viewport to show all markers.
       const allLng = [alon, ...guesses.map(g => g.lon)];
       const allLat = [alat, ...guesses.map(g => g.lat)];
       const minLng = Math.min(...allLng), maxLng = Math.max(...allLng);
@@ -144,25 +281,24 @@
 
       if (span < 0.01) {
         map.setCenter([alon, alat]);
-        map.setZoom(10);
+        map.setZoom(12);
       } else {
-        map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
-          padding: 80, maxZoom: 12, duration: 0,
-        });
+        map.fitBounds([[minLng, minLat], [maxLng, maxLat]],
+          { padding: 80, maxZoom: 11, duration: 0 });
       }
 
-      // Legend (named players only + actual).
+      // Legend.
       const legend = document.getElementById('legend');
       guesses.filter(g => g.name).forEach(g => {
         const d = document.createElement('div');
         d.className = 'leg';
-        d.innerHTML = `<div class="dot" style="background:${g.color}"></div>${g.name}`;
+        d.innerHTML = `<div class="leg-dot" style="background:${g.color}"></div>${g.name}`;
         legend.appendChild(d);
       });
       if (guesses.length > 0) {
         const d = document.createElement('div');
         d.className = 'leg';
-        d.innerHTML = `<div class="dot" style="background:#222222"></div>actual`;
+        d.innerHTML = `<div class="leg-dot" style="background:#111;border-color:#fff"></div>actual`;
         legend.appendChild(d);
       }
     });
