@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GeoGuessr — Pick a location</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: system-ui, sans-serif; }
@@ -29,38 +29,48 @@
       text-overflow: ellipsis;
     }
 
-    #banner.copied {
-      background: #d4edda;
-    }
-
-    #banner.loading {
-      color: #999;
-    }
+    #banner.copied  { background: #d4edda; }
+    #banner.loading { color: #999; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="banner">🌍 Tap anywhere to copy coordinates</div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <script>
     const lang   = new URLSearchParams(window.location.search).get('lang') || 'en';
     const banner = document.getElementById('banner');
 
-    const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 19,
-    }).addTo(map);
+    const map = new maplibregl.Map({
+      container: 'map',
+      style:     'https://tiles.openfreemap.org/styles/liberty',
+      center:    [0, 20],
+      zoom:      2,
+    });
+
+    // Once the style is loaded, switch all label layers to the requested language.
+    // Falls back to the default OSM name if no translation exists.
+    map.once('load', () => {
+      map.getStyle().layers.forEach(layer => {
+        if (layer.layout && layer.layout['text-field']) {
+          map.setLayoutProperty(layer.id, 'text-field', [
+            'coalesce',
+            ['get', `name:${lang}`],
+            ['get', 'name'],
+          ]);
+        }
+      });
+    });
 
     let marker;
 
-    async function reversGeocode(lat, lon) {
+    async function reverseGeocode(lat, lon) {
       try {
-        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10&accept-language=${lang}`;
-        const resp = await fetch(url, { headers: { 'Accept-Language': lang } });
+        const url  = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10&accept-language=${lang}`;
+        const resp = await fetch(url);
         const data = await resp.json();
-        const a = data.address || {};
+        const a    = data.address || {};
         const locality = a.city || a.town || a.village || a.municipality || a.county || a.state || '';
         const country  = a.country || '';
         if (locality && country) return `${locality}, ${country}`;
@@ -71,20 +81,18 @@
     }
 
     map.on('click', async e => {
-      const lat    = e.latlng.lat.toFixed(5);
-      const lon    = e.latlng.lng.toFixed(5);
+      const lat    = e.lngLat.lat.toFixed(5);
+      const lon    = e.lngLat.lng.toFixed(5);
       const coords = `${lat},${lon}`;
 
-      // Drop / move marker immediately.
       if (marker) marker.remove();
-      marker = L.marker(e.latlng).addTo(map);
+      marker = new maplibregl.Marker().setLngLat([lon, lat]).addTo(map);
 
-      // Show loading state while geocoding.
       banner.textContent = `📍 ${coords} …`;
       banner.classList.add('loading');
       banner.classList.remove('copied');
 
-      const place = await reversGeocode(lat, lon);
+      const place = await reverseGeocode(lat, lon);
       banner.classList.remove('loading');
 
       const label = place ? `${coords}  — ${place}` : coords;
