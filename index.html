@@ -24,10 +24,17 @@
       white-space: nowrap;
       text-align: center;
       transition: background 0.2s;
+      max-width: 90vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #banner.copied {
       background: #d4edda;
+    }
+
+    #banner.loading {
+      color: #999;
     }
   </style>
 </head>
@@ -37,34 +44,57 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+    const lang   = new URLSearchParams(window.location.search).get('lang') || 'en';
+    const banner = document.getElementById('banner');
 
+    const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 19,
     }).addTo(map);
 
-    const banner = document.getElementById('banner');
     let marker;
 
-    map.on('click', e => {
-      const lat = e.latlng.lat.toFixed(5);
-      const lon = e.latlng.lng.toFixed(5);
+    async function reversGeocode(lat, lon) {
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10&accept-language=${lang}`;
+        const resp = await fetch(url, { headers: { 'Accept-Language': lang } });
+        const data = await resp.json();
+        const a = data.address || {};
+        const locality = a.city || a.town || a.village || a.municipality || a.county || a.state || '';
+        const country  = a.country || '';
+        if (locality && country) return `${locality}, ${country}`;
+        if (locality) return locality;
+        if (country)  return country;
+      } catch (_) {}
+      return '';
+    }
+
+    map.on('click', async e => {
+      const lat    = e.latlng.lat.toFixed(5);
+      const lon    = e.latlng.lng.toFixed(5);
       const coords = `${lat},${lon}`;
 
-      // Drop / move marker
+      // Drop / move marker immediately.
       if (marker) marker.remove();
       marker = L.marker(e.latlng).addTo(map);
 
-      // Copy to clipboard
+      // Show loading state while geocoding.
+      banner.textContent = `📍 ${coords} …`;
+      banner.classList.add('loading');
+      banner.classList.remove('copied');
+
+      const place = await reversGeocode(lat, lon);
+      banner.classList.remove('loading');
+
+      const label = place ? `${coords}  — ${place}` : coords;
+
       navigator.clipboard.writeText(coords).then(() => {
-        banner.textContent = `✅ Copied: ${coords}  — paste it in the chat`;
+        banner.textContent = `✅ Copied: ${label}  · paste into chat`;
         banner.classList.add('copied');
-        setTimeout(() => banner.classList.remove('copied'), 2000);
+        setTimeout(() => banner.classList.remove('copied'), 3000);
       }).catch(() => {
-        // Clipboard blocked (HTTP) — show manually
-        banner.textContent = `📍 ${coords}  — copy and paste into the chat`;
-        banner.classList.remove('copied');
+        banner.textContent = `📍 ${label}  · copy and paste into chat`;
       });
     });
   </script>
