@@ -119,8 +119,11 @@
 
     // ── MXC → Matrix media URLs ─────────────────────────────────────────────────
     // Square crop thumbnail — used for avatar markers (method=crop keeps faces centred).
+    // Also handles data: URLs produced by the bot when the homeserver requires auth.
     function mxcToThumb(mxcUrl, px = 96) {
-      if (!mxcUrl || !mxcUrl.startsWith('mxc://')) return null;
+      if (!mxcUrl) return null;
+      if (mxcUrl.startsWith('data:')) return mxcUrl;   // already embedded by bot
+      if (!mxcUrl.startsWith('mxc://')) return null;
       const rest    = mxcUrl.slice(6);
       const slash   = rest.indexOf('/');
       if (slash < 0) return null;
