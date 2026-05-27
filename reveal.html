@@ -25,9 +25,11 @@
       letter-spacing: -0.5px;
       user-select: none;
       box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-      transition: transform 0.12s ease;
       /* anchor: center of circle sits on the lat/lon */
     }
+    /* No transition: transform here — MapLibre sets transform directly on this
+       element to position it; a CSS transition would make markers lag behind
+       the map during zoom and appear misaligned after fitBounds. */
     .avatar-marker:active { transform: scale(0.90); }
 
     .avatar-marker img {
