@@ -154,10 +154,12 @@
 
     const guesses = [];
 
-    // Multi-guess mode: &g=encodedName|lat|lon|RRGGBB|encodedMxcOrEmpty|score|distKm
+    // Multi-guess mode: &g=encodedName%7Clat%7Clon%7CRRGGBB%7CencodedMxcOrEmpty%7Cscore%7CdistKm
+    // Fields are separated by '%7C' (percent-encoded '|') so the separator survives
+    // browser URL normalisation, which encodes raw '|' → '%7C' and breaks split('|').
     // (one &g= per player, ranking is implicit from order)
     p.g.forEach((raw, rank) => {
-      const parts = raw.split('|');
+      const parts = raw.split('%7C');
       guesses.push({
         rank,
         name:  decodeURIComponent((parts[0] || '').replace(/\+/g, ' ')),
