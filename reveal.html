@@ -29,7 +29,9 @@
     }
     /* No transition: transform here — MapLibre sets transform directly on this
        element to position it; a CSS transition would make markers lag behind
-       the map during zoom and appear misaligned after fitBounds. */
+       the map during zoom and appear misaligned after fitBounds.
+       No explicit position needed: MapLibre adds .maplibregl-marker which sets
+       position:absolute, and that also serves as containing block for the img. */
     .avatar-marker:active { transform: scale(0.90); }
 
     .avatar-marker img {
@@ -198,7 +200,6 @@
       const el = document.createElement('div');
       el.className = 'avatar-marker' + (g.rank === 0 && guesses.length > 1 ? ' winner' : '');
       el.style.setProperty('--c', g.color);
-      el.style.position = 'relative'; // needed for img absolute positioning
 
       // Show initials as the base layer (always visible until/unless image loads).
       el.textContent = initials(g.name || '?');
