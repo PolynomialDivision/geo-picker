@@ -108,7 +108,7 @@
     // 'g' is collected as an array; everything else is a single string.
     function parseQuery() {
       const out = { g: [] };
-      for (const part of window.location.search.slice(1).split('&')) {
+      for (const part of window.location.hash.slice(1).split('&')) {
         const eq = part.indexOf('=');
         if (eq < 0) continue;
         const key = decodeURIComponent(part.slice(0, eq));
