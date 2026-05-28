@@ -172,6 +172,9 @@
       });
     });
 
+    console.log('[geo-picker] raw search:', window.location.search);
+    console.log('[geo-picker] guesses:', guesses.map(g => ({name:g.name,lat:g.lat,lon:g.lon,color:g.color})));
+
     // Single-guess mode: &glat=…&glon=…&color=RRGGBB[&mxc=…&score=…&dist=…]
     if (p.glat && p.glon) {
       guesses.push({
