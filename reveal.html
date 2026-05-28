@@ -159,7 +159,7 @@
     // browser URL normalisation, which encodes raw '|' → '%7C' and breaks split('|').
     // (one &g= per player, ranking is implicit from order)
     p.g.forEach((raw, rank) => {
-      const parts = raw.split('%7C');
+      const parts = raw.split(/\||%7C/i);
       guesses.push({
         rank,
         name:  decodeURIComponent((parts[0] || '').replace(/\+/g, ' ')),
