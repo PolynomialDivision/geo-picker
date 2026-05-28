@@ -102,13 +102,47 @@
 
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <script>
-    // ── URL parsing ─────────────────────────────────────────────────────────────
-    // Manually split '&g=…' values on '|' BEFORE percent-decoding so that a
-    // player name containing '|' (encoded as %7C) doesn't break the separator.
-    // 'g' is collected as an array; everything else is a single string.
-    function parseQuery() {
+    // ── Payload decompression ────────────────────────────────────────────────────
+    // New format: #z=<base64url(deflate-raw(params))>
+    // Legacy format: #key=value&… (plain params, still supported)
+    async function loadParams() {
+      const hash = window.location.hash.slice(1);
+      if (!hash.startsWith('z=')) return hash;
+      try {
+        // base64url → standard base64 → Uint8Array
+        const b64 = hash.slice(2).replace(/-/g, '+').replace(/_/g, '/');
+        const pad = b64 + '='.repeat((4 - b64.length % 4) % 4);
+        const bin = atob(pad);
+        const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+        // Decompress raw DEFLATE (no zlib/gzip header)
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(bytes);
+        writer.close();
+        const reader = ds.readable.getReader();
+        const chunks = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        const len = chunks.reduce((n, c) => n + c.length, 0);
+        const buf = new Uint8Array(len);
+        let off = 0;
+        for (const c of chunks) { buf.set(c, off); off += c.length; }
+        return new TextDecoder().decode(buf);
+      } catch (e) {
+        console.error('[geo-picker] decompression failed:', e);
+        return '';
+      }
+    }
+
+    // ── URL / param parsing ──────────────────────────────────────────────────────
+    // Accepts either the raw hash string (legacy) or the decompressed params string.
+    // 'g' values are kept raw (not decoded) so the '|' / '%7C' separator is intact.
+    function parseQuery(str) {
       const out = { g: [] };
-      for (const part of window.location.hash.slice(1).split('&')) {
+      for (const part of str.split('&')) {
         const eq = part.indexOf('=');
         if (eq < 0) continue;
         const key = decodeURIComponent(part.slice(0, eq));
@@ -120,11 +154,10 @@
     }
 
     // ── MXC → Matrix media URLs ─────────────────────────────────────────────────
-    // Square crop thumbnail — used for avatar markers (method=crop keeps faces centred).
     // Also handles data: URLs produced by the bot when the homeserver requires auth.
     function mxcToThumb(mxcUrl, px = 96) {
       if (!mxcUrl) return null;
-      if (mxcUrl.startsWith('data:')) return mxcUrl;   // already embedded by bot
+      if (mxcUrl.startsWith('data:')) return mxcUrl;
       if (!mxcUrl.startsWith('mxc://')) return null;
       const rest    = mxcUrl.slice(6);
       const slash   = rest.indexOf('/');
@@ -146,74 +179,11 @@
       return km < 1 ? `${Math.round(km * 1000)} m` : `${Math.round(km)} km`;
     }
 
-    const MEDALS = ['🥇', '🥈', '🥉'];
-
     function escHtml(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    // ── Parse params ────────────────────────────────────────────────────────────
-    const p    = parseQuery();
-    const lang = p.lang || 'en';
-    const alat = parseFloat(p.alat);
-    const alon = parseFloat(p.alon);
-
-    const guesses = [];
-
-    // Multi-guess mode: &g=encodedName%7Clat%7Clon%7CRRGGBB%7CencodedMxcOrEmpty%7Cscore%7CdistKm
-    // Fields are separated by '%7C' (percent-encoded '|') so the separator survives
-    // browser URL normalisation, which encodes raw '|' → '%7C' and breaks split('|').
-    // (one &g= per player, ranking is implicit from order)
-    p.g.forEach((raw, rank) => {
-      const parts = raw.split(/\||%7C/i);
-      guesses.push({
-        rank,
-        name:  decodeURIComponent((parts[0] || '').replace(/\+/g, ' ')),
-        lat:   parseFloat(parts[1]),
-        lon:   parseFloat(parts[2]),
-        color: '#' + (parts[3] || '888888'),
-        mxc:   parts[4] ? decodeURIComponent(parts[4]) : null,
-        score: parts[5] !== undefined && parts[5] !== '' ? parseInt(parts[5])  : null,
-        dist:  parts[6] !== undefined && parts[6] !== '' ? parseFloat(parts[6]) : null,
-      });
-    });
-
-    console.log('[geo-picker] raw search:', window.location.search);
-    console.log('[geo-picker] guesses:', guesses.map(g => ({name: g.name, lat: g.lat, lon: g.lon, color: g.color})));
-
-    // Single-guess mode: &glat=…&glon=…&color=RRGGBB[&mxc=…&score=…&dist=…]
-    if (p.glat && p.glon) {
-      guesses.push({
-        rank:  0,
-        name:  p.name ? decodeURIComponent(p.name) : '',
-        lat:   parseFloat(p.glat),
-        lon:   parseFloat(p.glon),
-        color: '#' + (p.color || '3498DB'),
-        mxc:   p.mxc  ? decodeURIComponent(p.mxc) : null,
-        score: p.score !== undefined && p.score !== '' ? parseInt(p.score)   : null,
-        dist:  p.dist  !== undefined && p.dist  !== '' ? parseFloat(p.dist)  : null,
-      });
-    }
-
-    // ── Avatar marker element ────────────────────────────────────────────────────
-    function makeAvatarMarker(g) {
-      const el = document.createElement('div');
-      el.className = 'avatar-marker' + (g.rank === 0 && guesses.length > 1 ? ' winner' : '');
-      el.style.setProperty('--c', g.color);
-
-      // Show initials as the base layer (always visible until/unless image loads).
-      el.textContent = initials(g.name || '?');
-
-      const thumbUrl = mxcToThumb(g.mxc, 96); // fetch at 96 px (crisp on 2× screens)
-      if (thumbUrl) {
-        const img = document.createElement('img');
-        img.src = thumbUrl;
-        img.onerror = () => img.remove(); // silently fall back to initials already shown
-        el.appendChild(img);
-      }
-
-      return el;
-    }
+    const MEDALS = ['🥇', '🥈', '🥉'];
 
     // ── Popup HTML ───────────────────────────────────────────────────────────────
     function makePopupHtml(g) {
@@ -229,90 +199,146 @@
       </div>`;
     }
 
-    // ── Map ──────────────────────────────────────────────────────────────────────
-    const map = new maplibregl.Map({
-      container: 'map',
-      style:     'https://tiles.openfreemap.org/styles/liberty',
-      center:    [alon, alat],
-      zoom:      4,
-    });
+    // ── Main (async to allow payload decompression before map init) ──────────────
+    (async () => {
+      const p    = parseQuery(await loadParams());
+      const lang = p.lang || 'en';
+      const alat = parseFloat(p.alat);
+      const alon = parseFloat(p.alon);
 
-    map.once('load', () => {
-      // Switch all label layers to the requested language.
-      for (const layer of map.getStyle().layers) {
-        if (layer.layout?.['text-field']) {
-          map.setLayoutProperty(layer.id, 'text-field',
-            ['coalesce', ['get', `name:${lang}`], ['get', 'name']]);
-        }
-      }
+      const guesses = [];
 
-      // Dashed lines: each guess → actual location (drawn first, below markers).
-      guesses.forEach((g, i) => {
-        map.addSource(`line-${i}`, {
-          type: 'geojson',
-          data: { type: 'Feature', geometry: {
-            type: 'LineString',
-            coordinates: [[g.lon, g.lat], [alon, alat]],
-          }},
-        });
-        map.addLayer({
-          id: `line-${i}`, type: 'line', source: `line-${i}`,
-          paint: { 'line-color': g.color, 'line-width': 2.5, 'line-dasharray': [4, 3] },
+      // Multi-guess: &g=encodedName|lat|lon|RRGGBB|mxcOrEmpty|score|dist
+      // Separator is '|' (compressed format) or '%7C' (legacy URL format) — regex handles both.
+      p.g.forEach((raw, rank) => {
+        const parts = raw.split(/\||%7C/i);
+        guesses.push({
+          rank,
+          name:  decodeURIComponent((parts[0] || '').replace(/\+/g, ' ')),
+          lat:   parseFloat(parts[1]),
+          lon:   parseFloat(parts[2]),
+          color: '#' + (parts[3] || '888888'),
+          mxc:   parts[4] ? decodeURIComponent(parts[4]) : null,
+          score: parts[5] !== undefined && parts[5] !== '' ? parseInt(parts[5])  : null,
+          dist:  parts[6] !== undefined && parts[6] !== '' ? parseFloat(parts[6]) : null,
         });
       });
 
-      // Actual location — small dark pin (below player markers in z-order).
-      const actualEl = document.createElement('div');
-      actualEl.className = 'actual-marker';
-      new maplibregl.Marker({ element: actualEl, anchor: 'center' })
-        .setLngLat([alon, alat])
-        .setPopup(
-          new maplibregl.Popup({ offset: 13, closeButton: false })
-            .setHTML('<div><strong>📍 Actual location</strong></div>')
-        )
-        .addTo(map);
+      console.log('[geo-picker] guesses:', guesses.map(g => ({name: g.name, lat: g.lat, lon: g.lon, color: g.color})));
 
-      // Avatar markers — add highest rank first so rank-0 (winner) is last in DOM = on top.
-      [...guesses].sort((a, b) => b.rank - a.rank).forEach(g => {
-        new maplibregl.Marker({ element: makeAvatarMarker(g), anchor: 'center' })
-          .setLngLat([g.lon, g.lat])
+      // Legacy single-guess: &glat=…&glon=…&color=RRGGBB[&mxc=…&score=…&dist=…]
+      if (p.glat && p.glon) {
+        guesses.push({
+          rank:  0,
+          name:  p.name ? decodeURIComponent(p.name) : '',
+          lat:   parseFloat(p.glat),
+          lon:   parseFloat(p.glon),
+          color: '#' + (p.color || '3498DB'),
+          mxc:   p.mxc  ? decodeURIComponent(p.mxc) : null,
+          score: p.score !== undefined && p.score !== '' ? parseInt(p.score)   : null,
+          dist:  p.dist  !== undefined && p.dist  !== '' ? parseFloat(p.dist)  : null,
+        });
+      }
+
+      // ── Avatar marker element ──────────────────────────────────────────────────
+      function makeAvatarMarker(g) {
+        const el = document.createElement('div');
+        el.className = 'avatar-marker' + (g.rank === 0 && guesses.length > 1 ? ' winner' : '');
+        el.style.setProperty('--c', g.color);
+        el.textContent = initials(g.name || '?');
+        const thumbUrl = mxcToThumb(g.mxc, 96);
+        if (thumbUrl) {
+          const img = document.createElement('img');
+          img.src = thumbUrl;
+          img.onerror = () => img.remove();
+          el.appendChild(img);
+        }
+        return el;
+      }
+
+      // ── Map ────────────────────────────────────────────────────────────────────
+      const map = new maplibregl.Map({
+        container: 'map',
+        style:     'https://tiles.openfreemap.org/styles/liberty',
+        center:    [alon, alat],
+        zoom:      4,
+      });
+
+      map.once('load', () => {
+        for (const layer of map.getStyle().layers) {
+          if (layer.layout?.['text-field']) {
+            map.setLayoutProperty(layer.id, 'text-field',
+              ['coalesce', ['get', `name:${lang}`], ['get', 'name']]);
+          }
+        }
+
+        // Dashed lines: each guess → actual location (drawn first, below markers).
+        guesses.forEach((g, i) => {
+          map.addSource(`line-${i}`, {
+            type: 'geojson',
+            data: { type: 'Feature', geometry: {
+              type: 'LineString',
+              coordinates: [[g.lon, g.lat], [alon, alat]],
+            }},
+          });
+          map.addLayer({
+            id: `line-${i}`, type: 'line', source: `line-${i}`,
+            paint: { 'line-color': g.color, 'line-width': 2.5, 'line-dasharray': [4, 3] },
+          });
+        });
+
+        // Actual location pin.
+        const actualEl = document.createElement('div');
+        actualEl.className = 'actual-marker';
+        new maplibregl.Marker({ element: actualEl, anchor: 'center' })
+          .setLngLat([alon, alat])
           .setPopup(
-            new maplibregl.Popup({ offset: 27, closeButton: false })
-              .setHTML(makePopupHtml(g))
+            new maplibregl.Popup({ offset: 13, closeButton: false })
+              .setHTML('<div><strong>📍 Actual location</strong></div>')
           )
           .addTo(map);
+
+        // Avatar markers — highest rank first in DOM so rank-0 (winner) is on top.
+        [...guesses].sort((a, b) => b.rank - a.rank).forEach(g => {
+          new maplibregl.Marker({ element: makeAvatarMarker(g), anchor: 'center' })
+            .setLngLat([g.lon, g.lat])
+            .setPopup(
+              new maplibregl.Popup({ offset: 27, closeButton: false })
+                .setHTML(makePopupHtml(g))
+            )
+            .addTo(map);
+        });
+
+        // Fit viewport to all markers.
+        const allLng = [alon, ...guesses.map(g => g.lon)];
+        const allLat = [alat, ...guesses.map(g => g.lat)];
+        const minLng = Math.min(...allLng), maxLng = Math.max(...allLng);
+        const minLat = Math.min(...allLat), maxLat = Math.max(...allLat);
+        const span   = Math.max(maxLng - minLng, maxLat - minLat);
+        if (span < 0.01) {
+          map.setCenter([alon, alat]);
+          map.setZoom(12);
+        } else {
+          map.fitBounds([[minLng, minLat], [maxLng, maxLat]],
+            { padding: 80, maxZoom: 11, duration: 0 });
+        }
+
+        // Legend.
+        const legend = document.getElementById('legend');
+        guesses.filter(g => g.name).forEach(g => {
+          const d = document.createElement('div');
+          d.className = 'leg';
+          d.innerHTML = `<div class="leg-dot" style="background:${g.color}"></div>${escHtml(g.name)}`;
+          legend.appendChild(d);
+        });
+        if (guesses.length > 0) {
+          const d = document.createElement('div');
+          d.className = 'leg';
+          d.innerHTML = `<div class="leg-dot" style="background:#111;border-color:#fff"></div>actual`;
+          legend.appendChild(d);
+        }
       });
-
-      // Fit viewport to show all markers.
-      const allLng = [alon, ...guesses.map(g => g.lon)];
-      const allLat = [alat, ...guesses.map(g => g.lat)];
-      const minLng = Math.min(...allLng), maxLng = Math.max(...allLng);
-      const minLat = Math.min(...allLat), maxLat = Math.max(...allLat);
-      const span   = Math.max(maxLng - minLng, maxLat - minLat);
-
-      if (span < 0.01) {
-        map.setCenter([alon, alat]);
-        map.setZoom(12);
-      } else {
-        map.fitBounds([[minLng, minLat], [maxLng, maxLat]],
-          { padding: 80, maxZoom: 11, duration: 0 });
-      }
-
-      // Legend.
-      const legend = document.getElementById('legend');
-      guesses.filter(g => g.name).forEach(g => {
-        const d = document.createElement('div');
-        d.className = 'leg';
-        d.innerHTML = `<div class="leg-dot" style="background:${g.color}"></div>${escHtml(g.name)}`;
-        legend.appendChild(d);
-      });
-      if (guesses.length > 0) {
-        const d = document.createElement('div');
-        d.className = 'leg';
-        d.innerHTML = `<div class="leg-dot" style="background:#111;border-color:#fff"></div>actual`;
-        legend.appendChild(d);
-      }
-    });
+    })();
   </script>
 </body>
 </html>
