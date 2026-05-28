@@ -64,6 +64,7 @@
     });
 
     let marker;
+    let activeClickId = 0;
 
     async function reverseGeocode(lat, lon) {
       try {
@@ -81,18 +82,22 @@
     }
 
     map.on('click', async e => {
-      const lat    = e.lngLat.lat.toFixed(5);
-      const lon    = e.lngLat.lng.toFixed(5);
+      const id     = ++activeClickId;
+      const latNum = e.lngLat.lat;
+      const lonNum = e.lngLat.lng;
+      const lat    = latNum.toFixed(5);
+      const lon    = lonNum.toFixed(5);
       const coords = `${lat},${lon}`;
 
       if (marker) marker.remove();
-      marker = new maplibregl.Marker().setLngLat([lon, lat]).addTo(map);
+      marker = new maplibregl.Marker().setLngLat([lonNum, latNum]).addTo(map);
 
       banner.textContent = `📍 ${coords} …`;
       banner.classList.add('loading');
       banner.classList.remove('copied');
 
       const place = await reverseGeocode(lat, lon);
+      if (id !== activeClickId) return;
       banner.classList.remove('loading');
 
       const label = place ? `${coords}  — ${place}` : coords;

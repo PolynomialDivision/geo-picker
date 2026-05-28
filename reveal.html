@@ -146,6 +146,10 @@
 
     const MEDALS = ['🥇', '🥈', '🥉'];
 
+    function escHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     // ── Parse params ────────────────────────────────────────────────────────────
     const p    = parseQuery();
     const lang = p.lang || 'en';
@@ -171,9 +175,6 @@
         dist:  parts[6] !== undefined && parts[6] !== '' ? parseFloat(parts[6]) : null,
       });
     });
-
-    console.log('[geo-picker] raw search:', window.location.search);
-    console.log('[geo-picker] guesses:', guesses.map(g => ({name:g.name,lat:g.lat,lon:g.lon,color:g.color})));
 
     // Single-guess mode: &glat=…&glon=…&color=RRGGBB[&mxc=…&score=…&dist=…]
     if (p.glat && p.glon) {
@@ -213,13 +214,13 @@
     // ── Popup HTML ───────────────────────────────────────────────────────────────
     function makePopupHtml(g) {
       const medal     = MEDALS[g.rank] || '';
-      const scoreLine = g.score !== null
+      const scoreLine = Number.isFinite(g.score)
         ? `<div class="pop-row">🎯 ${g.score.toLocaleString()} pts</div>` : '';
-      const distLine  = g.dist !== null
+      const distLine  = Number.isFinite(g.dist)
         ? `<div class="pop-row">📍 ${fmtDist(g.dist)} away</div>` : '';
       return `<div>
         ${medal ? `<span class="pop-medal">${medal}</span> ` : ''}
-        <span class="pop-name">${g.name}</span>
+        <span class="pop-name">${escHtml(g.name)}</span>
         ${scoreLine}${distLine}
       </div>`;
     }
@@ -267,8 +268,8 @@
         )
         .addTo(map);
 
-      // Avatar markers — add in reverse rank order so rank-0 (winner) is on top.
-      [...guesses].reverse().forEach(g => {
+      // Avatar markers — add highest rank first so rank-0 (winner) is last in DOM = on top.
+      [...guesses].sort((a, b) => b.rank - a.rank).forEach(g => {
         new maplibregl.Marker({ element: makeAvatarMarker(g), anchor: 'center' })
           .setLngLat([g.lon, g.lat])
           .setPopup(
@@ -298,7 +299,7 @@
       guesses.filter(g => g.name).forEach(g => {
         const d = document.createElement('div');
         d.className = 'leg';
-        d.innerHTML = `<div class="leg-dot" style="background:${g.color}"></div>${g.name}`;
+        d.innerHTML = `<div class="leg-dot" style="background:${g.color}"></div>${escHtml(g.name)}`;
         legend.appendChild(d);
       });
       if (guesses.length > 0) {
