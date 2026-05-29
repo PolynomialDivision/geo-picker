@@ -272,8 +272,20 @@
           }
         }
 
+        // Normalize a longitude to the shortest path from a reference.
+        // MapLibre accepts values outside [-180,180] and wraps correctly.
+        function normLon(ref, lon) {
+          while (lon - ref >  180) lon -= 360;
+          while (lon - ref < -180) lon += 360;
+          return lon;
+        }
+
+        // Normalize all guess lons relative to alon so lines and fitBounds
+        // always use the shorter arc (fixes antimeridian crossings).
+        const normGuesses = guesses.map(g => ({ ...g, lon: normLon(alon, g.lon) }));
+
         // Dashed lines: each guess → actual location (drawn first, below markers).
-        guesses.forEach((g, i) => {
+        normGuesses.forEach((g, i) => {
           map.addSource(`line-${i}`, {
             type: 'geojson',
             data: { type: 'Feature', geometry: {
@@ -298,8 +310,8 @@
           )
           .addTo(map);
 
-        // Avatar markers — highest rank first in DOM so rank-0 (winner) is on top.
-        [...guesses].sort((a, b) => b.rank - a.rank).forEach(g => {
+        // Avatar markers — use normalized lons so fitBounds is consistent.
+        [...normGuesses].sort((a, b) => b.rank - a.rank).forEach(g => {
           new maplibregl.Marker({ element: makeAvatarMarker(g), anchor: 'center' })
             .setLngLat([g.lon, g.lat])
             .setPopup(
@@ -309,9 +321,9 @@
             .addTo(map);
         });
 
-        // Fit viewport to all markers.
-        const allLng = [alon, ...guesses.map(g => g.lon)];
-        const allLat = [alat, ...guesses.map(g => g.lat)];
+        // Fit viewport to all markers (using normalized lons for correct short-arc bounds).
+        const allLng = [alon, ...normGuesses.map(g => g.lon)];
+        const allLat = [alat, ...normGuesses.map(g => g.lat)];
         const minLng = Math.min(...allLng), maxLng = Math.max(...allLng);
         const minLat = Math.min(...allLat), maxLat = Math.max(...allLat);
         const span   = Math.max(maxLng - minLng, maxLat - minLat);
