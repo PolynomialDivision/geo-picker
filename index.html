@@ -30,27 +30,17 @@
     }
 
     #banner.copied  { background: #d4edda; }
-    #banner.locked  { background: #d4edda; }
     #banner.loading { color: #999; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div id="banner">🌍 Tap anywhere …</div>
+  <div id="banner">🌍 Tap anywhere to copy coordinates</div>
 
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
   <script>
-    const params = new URLSearchParams(window.location.search);
-    const lang   = params.get('lang')  || 'en';
-    const base   = params.get('base')  || '';
-    const token  = params.get('token') || '';
-    const once   = params.get('once')  === '1';
-    const submitMode = !!(base && token);
-
+    const lang   = new URLSearchParams(window.location.search).get('lang') || 'en';
     const banner = document.getElementById('banner');
-    banner.textContent = submitMode
-      ? '🌍 Tap anywhere to set your guess'
-      : '🌍 Tap anywhere to copy coordinates';
 
     const map = new maplibregl.Map({
       container: 'map',
@@ -75,7 +65,6 @@
 
     let marker;
     let activeClickId = 0;
-    let submitted = false;
 
     async function reverseGeocode(lat, lon) {
       try {
@@ -100,14 +89,12 @@
       const lon    = lonNum.toFixed(5);
       const coords = `${lat},${lon}`;
 
-      if (submitted && once) return;
-
       if (marker) marker.remove();
       marker = new maplibregl.Marker().setLngLat([lonNum, latNum]).addTo(map);
 
       banner.textContent = `📍 ${coords} …`;
       banner.classList.add('loading');
-      banner.classList.remove('copied', 'locked');
+      banner.classList.remove('copied');
 
       const place = await reverseGeocode(lat, lon);
       if (id !== activeClickId) return;
@@ -115,46 +102,13 @@
 
       const label = place ? `${coords}  — ${place}` : coords;
 
-      if (submitMode) {
-        banner.textContent = `⏳ ${label} …`;
-        banner.classList.add('loading');
-        try {
-          const r = await fetch(`${base}/g/${token}/submit`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({lat: latNum, lon: lonNum}),
-          });
-          if (id !== activeClickId) return;
-          banner.classList.remove('loading');
-          if (r.ok) {
-            const j = await r.json();
-            const p = (j && j.geocoded) ? j.geocoded : label;
-            submitted = true;
-            if (once) {
-              banner.textContent = `✅ Locked in: ${p}`;
-              banner.classList.add('locked');
-            } else {
-              banner.textContent = `✅ Submitted: ${p}  · tap to update`;
-              banner.classList.add('copied');
-              setTimeout(() => banner.classList.remove('copied'), 3000);
-            }
-          } else {
-            banner.textContent = `❌ Submit failed — tap to retry`;
-          }
-        } catch (_) {
-          if (id !== activeClickId) return;
-          banner.classList.remove('loading');
-          banner.textContent = `❌ Network error — tap to retry`;
-        }
-      } else {
-        navigator.clipboard.writeText(coords).then(() => {
-          banner.textContent = `✅ Copied: ${label}  · paste into chat`;
-          banner.classList.add('copied');
-          setTimeout(() => banner.classList.remove('copied'), 3000);
-        }).catch(() => {
-          banner.textContent = `📍 ${label}  · copy and paste into chat`;
-        });
-      }
+      navigator.clipboard.writeText(coords).then(() => {
+        banner.textContent = `✅ Copied: ${label}  · paste into chat`;
+        banner.classList.add('copied');
+        setTimeout(() => banner.classList.remove('copied'), 3000);
+      }).catch(() => {
+        banner.textContent = `📍 ${label}  · copy and paste into chat`;
+      });
     });
   </script>
 </body>
