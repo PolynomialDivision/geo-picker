@@ -57,6 +57,7 @@
           map.setLayoutProperty(layer.id, 'text-field', [
             'coalesce',
             ['get', `name:${lang}`],
+            ['get', 'name:en'],
             ['get', 'name'],
           ]);
         }
