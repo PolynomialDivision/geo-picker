@@ -31,10 +31,46 @@
 
     #banner.copied  { background: #d4edda; }
     #banner.loading { color: #999; }
+
+    #search {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      z-index: 1000;
+      width: min(400px, calc(100vw - 24px));
+    }
+    #search input {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      background: #fff;
+      color: #222;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      outline: none;
+    }
+    #search button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="search">
+    <input id="search-input" type="text" placeholder="Search or paste lat, lon…" autocomplete="off">
+    <button id="search-btn">🔍</button>
+  </div>
   <div id="banner">🌍 Tap anywhere to copy coordinates</div>
 
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
@@ -66,6 +102,34 @@
 
     let marker;
     let activeClickId = 0;
+
+    async function doSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      if (!q) return;
+      const m = q.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+      if (m) {
+        const lat = parseFloat(m[1]), lon = parseFloat(m[2]);
+        if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+          map.flyTo({center: [lon, lat], zoom: 12});
+          map.fire('click', {lngLat: {lat, lng: lon}});
+          return;
+        }
+      }
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&accept-language=${lang}`;
+        const r   = await fetch(url);
+        const d   = await r.json();
+        if (d && d[0]) {
+          const lat = parseFloat(d[0].lat), lon = parseFloat(d[0].lon);
+          map.flyTo({center: [lon, lat], zoom: 10});
+          map.fire('click', {lngLat: {lat, lng: lon}});
+        }
+      } catch (_) {}
+    }
+    document.getElementById('search-btn').addEventListener('click', doSearch);
+    document.getElementById('search-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') doSearch();
+    });
 
     async function reverseGeocode(lat, lon) {
       try {
