@@ -63,6 +63,20 @@
       cursor: pointer;
       box-shadow: 0 2px 8px rgba(0,0,0,0.25);
     }
+    #layer-toggle {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      z-index: 1000;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
   </style>
 </head>
 <body>
@@ -71,6 +85,7 @@
     <input id="search-input" type="text" placeholder="Search or paste lat, lon…" autocomplete="off">
     <button id="search-btn">🔍</button>
   </div>
+  <button id="layer-toggle">🛰 Satellite</button>
   <div id="banner">🌍 Tap anywhere to copy coordinates</div>
 
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
@@ -78,16 +93,23 @@
     const lang   = new URLSearchParams(window.location.search).get('lang') || 'en';
     const banner = document.getElementById('banner');
 
+    const LIBERTY   = 'https://tiles.openfreemap.org/styles/liberty';
+    const SATELLITE = {
+      version: 8,
+      sources: {sat: {type:'raster', tileSize:256, attribution:'© Esri',
+        tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}']}},
+      layers: [{id:'sat', type:'raster', source:'sat'}]
+    };
+    let isSatellite = false;
+
     const map = new maplibregl.Map({
       container: 'map',
-      style:     'https://tiles.openfreemap.org/styles/liberty',
+      style:     LIBERTY,
       center:    [0, 20],
       zoom:      2,
     });
 
-    // Once the style is loaded, switch all label layers to the requested language.
-    // Falls back to the default OSM name if no translation exists.
-    map.once('load', () => {
+    function applyLanguage() {
       map.getStyle().layers.forEach(layer => {
         if (layer.layout && layer.layout['text-field']) {
           map.setLayoutProperty(layer.id, 'text-field', [
@@ -98,6 +120,15 @@
           ]);
         }
       });
+    }
+
+    map.on('style.load', () => { if (!isSatellite) applyLanguage(); });
+
+    const toggleBtn = document.getElementById('layer-toggle');
+    toggleBtn.addEventListener('click', () => {
+      isSatellite = !isSatellite;
+      map.setStyle(isSatellite ? SATELLITE : LIBERTY);
+      toggleBtn.textContent = isSatellite ? '🗺 Map' : '🛰 Satellite';
     });
 
     let marker;
